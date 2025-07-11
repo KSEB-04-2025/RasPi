@@ -1,48 +1,51 @@
-import cv2
-import os
-import time
+GET
+	http://34.64.123.85:8000/upload/
+Status
+404
+Not Found
+VersionHTTP/1.1
+Transferred154 B (22 B size)
+Request PriorityHighest
+DNS ResolutionSystem
 
-def capture_image(save_path, camera_index=0):
-    """
-    이미지를 캡처하여 지정된 경로에 저장합니다.
+	
+content-length
+	22
+content-type
+	application/json
+date
+	Fri, 11 Jul 2025 02:02:43 GMT
+server
+	uvicorn
+	
+Accept
+	text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+Accept-Encoding
+	gzip, deflate
+Accept-Language
+	en-US,en;q=0.5
+Cache-Control
+	no-cache
+Connection
+	keep-alive
+Host
+	34.64.123.85:8000
+Pragma
+	no-cache
+Priority
+	u=0, i
+Upgrade-Insecure-Requests
+	1
+User-Agent
+	Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0
 
-    Args:
-        save_path (str): 이미지를 저장할 전체 파일 경로.
-        camera_index (int): 사용할 카메라의 인덱스.
-    
-    Returns:
-        bool: 캡처 및 저장 성공 여부.
-    """
-    cap = cv2.VideoCapture(camera_index)
-    #cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    #cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
-    if not cap.isOpened():
-        print(f"오류: 카메라({camera_index})를 열 수 없습니다.")
-        return False
-
-    ret, frame = cap.read()
-    if ret:
-        cv2.imwrite(save_path, frame)
-        print(f"성공: 이미지가 '{save_path}'에 저장되었습니다.")
-        cap.release()
-        return True
-    else:
-        print("오류: 이미지를 캡처하지 못했습니다.")
-        cap.release()
-        return False
-
-if __name__ == "__main__":
-    # 저장 폴더 설정
-    home_dir = os.path.expanduser('~')
-    save_dir = os.path.join(home_dir, 'Desktop', 'captured_images')
-    os.makedirs(save_dir, exist_ok=True)
-    print(f"이미지 저장 폴더: {save_dir}")
-
-    # 저장 파일 경로 생성
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    filename = f"capture_{timestamp}.jpg"
-    file_path = os.path.join(save_dir, filename)
-
-    # 이미지 캡처 테스트
-    capture_image(save_path=file_path, camera_index=0)
+**root01@raspberrypi:~/Desktop/Project $ python a.py
+✅ 아두이노 연결 성공. 신호 대기 중...
+📥 수신된 신호: CAPTURE
+📸 성공: 이미지 저장 완료 → /home/root01/Desktop/captured_images/capture_20250710_155259.jpg
+❌ 서버 전송 실패: 404 Client Error: Not Found for url: http://34.64.123.85:8000/upload/
+📥 수신된 신호: CAPTURE
+📸 성공: 이미지 저장 완료 → /home/root01/Desktop/captured_images/capture_20250710_155304.jpg
+❌ 서버 전송 실패: 404 Client Error: Not Found for url: http://34.64.123.85:8000/upload/
+^C🔌 종료**
