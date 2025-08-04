@@ -3,31 +3,34 @@ import io
 import time
 import requests
 import cv2
+import threading
 from serial.serialutil import SerialException
 from google.cloud import storage
 
 # ─────────────────────────────
 # 기본 설정
-PORT = '/dev/ttyACM0'       # Arduino와 연결된 포트
+PORT = '/dev/ttyACM0'       # Arduino 연결 포트
 BAUD = 9600                 # 시리얼 통신 속도
 
-SNAP1_KEYWORD = "SNAP1"     # 1번 센서 감지 신호
-SNAP2_KEYWORD = "SNAP2"     # 2번 센서 감지 신호
+SNAP1_KEYWORD = "SNAP1"     # 결함 검사 트리거
+SNAP2_KEYWORD = "SNAP2"     # 등급 검사 트리거
 
-URL_SNAP1 = 'http://34.64.178.127:8000/defect'     # 결함 판별 서버
-URL_SNAP2 = 'http://34.64.178.127:8100/classify'   # 등급 분류 서버
+URL_SNAP1 = 'http://34.64.178.127:8000/defect'     # defect_server 주소
+URL_SNAP2 = 'http://34.64.178.127:8100/classify'   # classify_server 주소
 
-GCS_KEY_PATH = "service-account.json"              # GCP 인증키 경로
-BUCKET_NAME = "zezeone_images"                     # GCS 버킷 이름
-GCS_FOLDER_SNAP1 = "raw_defect"                    # SNAP1 저장 폴더
-GCS_FOLDER_SNAP2 = "raw_grade"                     # SNAP2 저장 폴더
+GCS_KEY_PATH = "service-account.json"              # GCP 서비스 계정 키 경로
+BUCKET_NAME = "zezeone_images"                     # Google Cloud Storage 버킷 이름
+GCS_FOLDER_SNAP1 = "raw_defect"                    # SNAP1 결과 저장 폴더
+GCS_FOLDER_SNAP2 = "raw_grade"                     # SNAP2 결과 저장 폴더
 
-CAM_IR1 = 0   # SNAP1 카메라 인덱스
-CAM_IR2 = 2   # SNAP2 카메라 인덱스
-RESOLUTION = (1280, 720)  # 카메라 해상도
+CAM_IR1 = 0                                         # 일반 카메라
+CAM_IR2 = 2                                         # 현미경 카메라
+RESOLUTION = (1280, 720)                           # 캡처 해상도
+
+SPRING_HEALTHCHECK_URL = 'http://<spring-server-ip>/api/healthcheck'  # Spring 서버 헬스체크 수신 엔드포인트
 
 # ─────────────────────────────
-# 시리얼 연결
+# 시리얼 포트 연결
 def open_serial():
     while True:
         try:
@@ -40,22 +43,19 @@ def open_serial():
             print("[!] Serial open failed, retrying in 3s:", e)
             time.sleep(3)
 
-# USB 카메라 캡처
+# USB 카메라 이미지 캡처
 def capture_image(index):
     cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
     if not cap.isOpened():
         raise RuntimeError(f"Camera {index} open failed")
-
-    w, h = RESOLUTION
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-    time.sleep(0.7)  # 카메라 워밍업
-
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, RESOLUTION[0])
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, RESOLUTION[1])
+    time.sleep(0.7)
     ok, frame = cap.read()
     cap.release()
     return frame if ok else None
 
-# 이미지 JPEG 인코딩
+# JPEG 이미지 인코딩
 def encode_jpeg(frame):
     ok, buf = cv2.imencode('.jpg', frame)
     return buf.tobytes() if ok else None
@@ -73,12 +73,11 @@ def upload_to_gcs(image_bytes, filename, folder):
         print("[!] GCS upload failed:", e)
         return None
 
-# 이미지 서버에 POST 요청
+# AI 서버 or Rule 서버로 이미지 전송
 def post_image_to_server(image_bytes, url, retries=3):
     for i in range(retries):
         try:
             stream = io.BytesIO(image_bytes)
-            stream.seek(0)
             files = {'file': ('image.jpg', stream, 'image/jpeg')}
             resp = requests.post(url, files=files, params={'return_type': 'json'}, timeout=10)
             if resp.status_code == 200:
@@ -89,8 +88,7 @@ def post_image_to_server(image_bytes, url, retries=3):
         time.sleep(0.5)
     return None
 
-# ─────────────────────────────
-# SNAP1 처리: 결함 여부 판단
+# SNAP1: 결함 검사 처리
 def handle_snap1(ser):
     try:
         frame = capture_image(CAM_IR1)
@@ -101,28 +99,24 @@ def handle_snap1(ser):
         ts = int(time.time())
         filename = f"ir1_{ts}.jpg"
 
-        # GCS 업로드
         if not upload_to_gcs(image_bytes, filename, GCS_FOLDER_SNAP1):
             ser.write(b"GO\n")
             return
 
-        # 서버 분석 요청
         result = post_image_to_server(image_bytes, URL_SNAP1)
         label = result.get("label") if result else None
 
-        # 결함일 경우 X, 아니면 GO
         if label == "X":
             ser.write(b"X\n")
             print("[SNAP1] Defect → sent: X")
         else:
             ser.write(b"GO\n")
             print("[SNAP1] Normal → sent: GO")
-
     except Exception as e:
         print("[!] SNAP1 error:", e)
         ser.write(b"GO\n")
 
-# SNAP2 처리: 품질 등급 판단
+# SNAP2: 등급 판별 처리
 def handle_snap2(ser):
     try:
         frame = capture_image(CAM_IR2)
@@ -133,29 +127,88 @@ def handle_snap2(ser):
         ts = int(time.time())
         filename = f"snap2_{ts}.jpg"
 
-        # GCS 업로드
         upload_to_gcs(image_bytes, filename, GCS_FOLDER_SNAP2)
 
-        # 서버 분석 요청
         result = post_image_to_server(image_bytes, URL_SNAP2)
         grade = result.get("label") if result else None
 
-        # 등급이 존재하면 전송, 없으면 GO
         if grade:
             ser.write(f"RESULT:{grade}\n".encode())
             print(f"[SNAP2] Grade → sent: RESULT:{grade}")
         else:
             ser.write(b"GO\n")
             print("[SNAP2] Grade missing → sent: GO")
-
     except Exception as e:
         print("[!] SNAP2 error:", e)
         ser.write(b"GO\n")
 
-# ─────────────────────────────
-# 메인 루프: 시리얼 신호 수신 및 분기 처리
+# 헬스체크: 카메라 상태 확인
+def check_camera(index):
+    try:
+        frame = capture_image(index)
+        return "ok" if frame is not None else "fail"
+    except Exception as e:
+        print(f"[!] Camera{index} error:", e)
+        return "fail"
+
+# 헬스체크: GCS 업로드/삭제 테스트
+def check_gcs():
+    try:
+        dummy = b"health-check"
+        ts = int(time.time())
+        filename = f"health_check_{ts}.txt"
+        client = storage.Client.from_service_account_json(GCS_KEY_PATH)
+        bucket = client.bucket(BUCKET_NAME)
+        blob = bucket.blob(f"health_check/{filename}")
+        blob.upload_from_string(dummy, content_type='text/plain')
+        blob.delete()
+        print(f"[GCS] Health check OK: {filename}")
+        return "ok"
+    except Exception as e:
+        print("[!] GCS health check failed:", e)
+        return "fail"
+
+# 헬스체크: 서버 핑 테스트
+def check_server_ping(url):
+    try:
+        resp = requests.get(url, timeout=3)
+        return "ok" if resp.status_code == 200 else "fail"
+    except Exception as e:
+        print("[!] Server ping failed:", e)
+        return "fail"
+
+# 헬스체크: 모든 상태 수집 및 스프링 서버로 전송
+def report_health_to_spring():
+    status = {
+        "camera1": check_camera(CAM_IR1),
+        "camera2": check_camera(CAM_IR2),
+        "gcs": check_gcs(),
+        "defect_server": check_server_ping("http://34.64.178.127:8000/ping"),
+        "classify_server": check_server_ping("http://34.64.178.127:8100/ping"),
+    }
+    status["overall"] = "ok" if all(v == "ok" for v in status.values()) else "fail"
+
+    try:
+        resp = requests.post(SPRING_HEALTHCHECK_URL, json=status, timeout=5)
+        print("[HealthCheck] Sent:", status, "| Response:", resp.status_code)
+    except Exception as e:
+        print("[!] Failed to report health to Spring:", e)
+
+# 헬스체크 스레드 실행 (1분 주기)
+def start_healthcheck_loop():
+    def loop():
+        while True:
+            report_health_to_spring()
+            time.sleep(60)
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+
+# 메인 루프: Arduino 신호 수신 후 분기
 def main():
     ser = open_serial()
+    report_health_to_spring()
+    start_healthcheck_loop()
+
     try:
         while True:
             line = ser.readline().decode(errors='ignore').strip()
