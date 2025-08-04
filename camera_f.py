@@ -17,7 +17,7 @@ SNAP1_KEYWORD = "SNAP1"   # IR1 감지: 일반캠 → AI 서버 전송
 SNAP2_KEYWORD = "SNAP2"   # IR2 감지: 현미경 → 품질 서버 + GCS 업로드
 
 # 서버 주소 (❗여기서 AI 서버 주소 확인 필요!)
-AI_SERVER_URL       = 'http://34.64.178.127:8000/upload'         # 예: http://192.168.0.100:8000/predict
+AI_SERVER_URL       = 'http://34.64.178.127:8000/defect'         # 예: http://192.168.0.100:8000/predict
 CLASSIFY_SERVER_URL = 'http://34.64.178.127:8100/classify'         # 품질 분류 서버
 
 # GCS 설정
