@@ -97,7 +97,7 @@ def handle_snap1(ser):
             raise ValueError("JPEG encoding failed")
 
         ts = int(time.time())
-        filename = f"ir1_{ts}.jpg"
+        filename = f"snap1_{ts}.jpg"
 
         if not upload_to_gcs(image_bytes, filename, GCS_FOLDER_SNAP1):
             ser.write(b"GO\n")
